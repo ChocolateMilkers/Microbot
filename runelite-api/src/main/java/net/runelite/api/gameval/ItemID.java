@@ -81519,22 +81519,22 @@ public final class ItemID
 	public static final int GURTOBS_FABRIC_ROLL = 31746;
 
 	/**
-	 * Swamp cruiser's hat
+	 * Nifty hat
 	 */
 	public static final int JUBBLY_JIVE_COSMETIC_HEAD = 31748;
 
 	/**
-	 * Swamp cruiser's jacket
+	 * Nifty jacket
 	 */
 	public static final int JUBBLY_JIVE_COSMETIC_CHEST = 31750;
 
 	/**
-	 * Swamp cruiser's trousers
+	 * Nifty trousers
 	 */
 	public static final int JUBBLY_JIVE_COSMETIC_LEGS = 31752;
 
 	/**
-	 * Swamp cruiser's shoes
+	 * Nifty shoes
 	 */
 	public static final int JUBBLY_JIVE_COSMETIC_FEET = 31754;
 
@@ -81554,22 +81554,22 @@ public final class ItemID
 	public static final int GWYNAS_FABRIC_ROLL = 31758;
 
 	/**
-	 * Crystal glider's hat
+	 * Sleek hat
 	 */
 	public static final int GWENITH_GLIDE_COSMETIC_HEAD = 31760;
 
 	/**
-	 * Crystal glider's jacket
+	 * Sleek jacket
 	 */
 	public static final int GWENITH_GLIDE_COSMETIC_CHEST = 31762;
 
 	/**
-	 * Crystal glider's trousers
+	 * Sleek trousers
 	 */
 	public static final int GWENITH_GLIDE_COSMETIC_LEGS = 31764;
 
 	/**
-	 * Crystal glider's shoes
+	 * Sleek shoes
 	 */
 	public static final int GWENITH_GLIDE_COSMETIC_FEET = 31766;
 
@@ -82708,12 +82708,12 @@ public final class ItemID
 	public static final int SAILING_SKILLGUIDE_MAST_MAHOGANY = 32169;
 
 	/**
-	 * Mahogany mast and canvas sails
+	 * Mahogany mast and linen sails
 	 */
 	public static final int SAILING_SKILLGUIDE_MAST_MAHOGANY_SKIFF = 32170;
 
 	/**
-	 * Mahogany mast and canvas sails
+	 * Mahogany mast and linen sails
 	 */
 	public static final int SAILING_SKILLGUIDE_MAST_MAHOGANY_SLOOP = 32171;
 
@@ -86050,21 +86050,6 @@ public final class ItemID
 	 * Jar of feathers
 	 */
 	public static final int JAR_OF_FEATHERS = 32921;
-
-	/**
-	 * Steel nails
-	 */
-	public static final int ANY_NAILS = 32923;
-
-	/**
-	 * Crate of arrowtips
-	 */
-	public static final int CARGO_CRATE_ARROWTIPS_RELLEKKA = 32924;
-
-	/**
-	 * Crate of clothes
-	 */
-	public static final int CARGO_CRATE_CLOTHES_VOID_KNIGHTS_OUTPOST = 32925;
 
 	public static final class Cert
 	{

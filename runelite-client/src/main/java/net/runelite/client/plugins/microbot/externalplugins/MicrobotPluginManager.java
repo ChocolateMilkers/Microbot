@@ -25,7 +25,6 @@
 package net.runelite.client.plugins.microbot.externalplugins;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Strings;
 import com.google.common.graph.Graph;
 import com.google.common.graph.GraphBuilder;
 import com.google.common.graph.Graphs;
@@ -83,8 +82,6 @@ import java.util.stream.Collectors;
 @Singleton
 public class MicrobotPluginManager {
     private static final File PLUGIN_DIR = new File(RuneLite.RUNELITE_DIR, "microbot-plugins");
-    private static final String INSTALLED_VERSION_GROUP = "microbotPluginVersions";
-    private static final String INSTALLED_VERSION_KEY_PREFIX = "plugin.";
 
     private final OkHttpClient okHttpClient;
     private final MicrobotPluginClient microbotPluginClient;
@@ -144,13 +141,6 @@ public class MicrobotPluginManager {
             Map<String, MicrobotPluginManifest> next = new HashMap<>(manifests.size());
             for (MicrobotPluginManifest m : manifests) {
                 next.put(m.getInternalName(), m);
-                try {
-                    List<String> versions = microbotPluginClient.fetchAvailableVersions(m.getInternalName());
-                    m.setAvailableVersions(versions);
-                } catch (IOException ex) {
-                    log.warn("Failed to fetch available versions for {}: {}", m.getInternalName(), ex.getMessage());
-                    log.debug("Version fetch error", ex);
-                }
             }
             boolean changed = !next.keySet().equals(manifestMap.keySet())
                     || next.entrySet().stream().anyMatch(e -> {
@@ -224,13 +214,14 @@ public class MicrobotPluginManager {
         }
 
         MicrobotPluginManifest authoritativeManifest = manifestMap.get(internalName);
-        InstalledPluginVersion storedVersion = lookupInstalledPluginVersion(internalName).orElse(null);
 
+        if (authoritativeManifest == null) {
+            return false;
+        }
         String localHash = calculateHash(internalName);
-        String authoritativeHash = storedVersion != null ? storedVersion.getSha256()
-                : authoritativeManifest != null ? authoritativeManifest.getSha256() : null;
+        String authoritativeHash = authoritativeManifest.getSha256();
 
-        if (Strings.isNullOrEmpty(localHash) || Strings.isNullOrEmpty(authoritativeHash)) {
+        if (localHash.isEmpty() || authoritativeHash == null || authoritativeHash.isEmpty()) {
             return false;
         }
 
@@ -780,9 +771,7 @@ public class MicrobotPluginManager {
 
             for (String pluginName : needsDownload) {
                 log.info("Downloading missing plugin: {}", pluginName);
-                String desiredVersion = getInstalledPluginVersion(pluginName)
-                        .orElse(null);
-                downloadPlugin(pluginName, desiredVersion);
+                downloadPlugin(pluginName);
             }
 
             Set<String> installedPluginNames = userManifestMap.values().stream()
@@ -890,7 +879,7 @@ public class MicrobotPluginManager {
      * @param internalName the internal name of the plugin to download
      * @return true if the plugin was successfully downloaded, false otherwise
      */
-    private boolean downloadPlugin(String internalName, @Nullable String versionOverride) {
+    private boolean downloadPlugin(String internalName) {
         MicrobotPluginManifest manifest = manifestMap.get(internalName);
         if (manifest == null) {
             log.error("Cannot download plugin {}: manifest not found", internalName);
@@ -900,13 +889,7 @@ public class MicrobotPluginManager {
         try {
             File pluginFile = getPluginJarFile(internalName);
 
-            String versionToDownload = !Strings.isNullOrEmpty(versionOverride) ? versionOverride : manifest.getVersion();
-            if (Strings.isNullOrEmpty(versionToDownload)) {
-                log.error("Cannot determine version to download for {}", internalName);
-                return false;
-            }
-
-            HttpUrl jarUrl = microbotPluginClient.getJarURL(manifest, versionToDownload);
+            HttpUrl jarUrl = microbotPluginClient.getJarURL(manifest);
             if (jarUrl == null || !jarUrl.isHttps()) {
                 log.error("Invalid JAR URL for plugin {}", internalName);
                 return false;
@@ -926,16 +909,7 @@ public class MicrobotPluginManager {
                 byte[] jarData = response.body().bytes();
 
                 Files.write(jarData, pluginFile);
-                log.info("Plugin {} (version {}) downloaded to {}", internalName, versionToDownload, pluginFile.getAbsolutePath());
-
-                String authoritativeHash = versionToDownload.equals(manifest.getVersion()) ? manifest.getSha256() : null;
-                if (Strings.isNullOrEmpty(authoritativeHash)) {
-                    authoritativeHash = calculateHash(internalName);
-                }
-                if (!Strings.isNullOrEmpty(authoritativeHash)) {
-                    rememberInstalledPluginVersion(internalName, versionToDownload, authoritativeHash);
-                }
-
+                log.info("Plugin {} downloaded to {}", internalName, pluginFile.getAbsolutePath());
                 return true;
             }
 
@@ -955,8 +929,8 @@ public class MicrobotPluginManager {
      *
      * @param manifest the manifest of the plugin to install
      */
-    public void installPlugin(MicrobotPluginManifest manifest, @Nullable String versionOverride) {
-        executor.submit(() -> install(manifest, versionOverride));
+    public void installPlugin(MicrobotPluginManifest manifest) {
+        executor.submit(() -> install(manifest));
     }
 
     /**
@@ -973,7 +947,7 @@ public class MicrobotPluginManager {
      *
      * @param manifest the manifest of the plugin to install
      */
-    public void install(MicrobotPluginManifest manifest, @Nullable String versionOverride) {
+    public void install(MicrobotPluginManifest manifest) {
         if (manifest == null || !manifestMap.containsValue(manifest)) {
             log.error("Can't install plugin: unable to identify manifest");
             return;
@@ -992,7 +966,7 @@ public class MicrobotPluginManager {
             return;
         }
 
-        var result = downloadPlugin(internalName, versionOverride);
+        var result = downloadPlugin(internalName);
         if (result) {
             //verifiy hash inside loadSidePlugin doesn't work
             loadSideLoadPlugin(internalName);
@@ -1026,7 +1000,6 @@ public class MicrobotPluginManager {
             return;
         }
 
-        File jar = getPluginJarFile(internalName);
         var pluginToRemove = pluginManager.getPlugins().stream().filter(x -> x.getClass().getSimpleName().equalsIgnoreCase(internalName)).findFirst();
         if (pluginToRemove.isPresent()) {
             URLClassLoader cl = loaders.remove(internalName);
@@ -1052,14 +1025,11 @@ public class MicrobotPluginManager {
                 cl.close();
             } catch (Exception ignored) {
             }
+            File jar = getPluginJarFile(internalName);
+            jar.delete();
         } else {
             log.warn("Plugin to remove not found in plugin manager: {}", internalName);
         }
-
-        if (jar.exists() && !jar.delete()) {
-            log.warn("Failed to delete plugin jar {}", jar.getAbsolutePath());
-        }
-        clearInstalledPluginVersion(internalName);
 
         log.info("Added plugin {} to installed list", manifest.getDisplayName());
         eventBus.post(new ExternalPluginsChanged());
@@ -1070,10 +1040,10 @@ public class MicrobotPluginManager {
      *
      * @param manifest
      */
-    public void update(MicrobotPluginManifest manifest, @Nullable String versionOverride) {
+    public void update(MicrobotPluginManifest manifest) {
         // remove and download the new one
         remove(manifest);
-        install(manifest, versionOverride);
+        install(manifest);
     }
 
     /**
@@ -1097,9 +1067,9 @@ public class MicrobotPluginManager {
      * Submits a plugin refresh task to the executor.
      * This will reload plugins based on the current profile's installed plugins list.
      */
-    public void updatePlugin(MicrobotPluginManifest manifest, @Nullable String versionOverride) {
+    public void updatePlugin(MicrobotPluginManifest manifest) {
         executor.submit(() -> {
-            update(manifest, versionOverride);
+            update(manifest);
         });
     }
 
@@ -1173,65 +1143,6 @@ public class MicrobotPluginManager {
             log.info("MicrobotPluginManager shutdown complete");
         } catch (Exception e) {
             log.error("Error during MicrobotPluginManager shutdown", e);
-        }
-    }
-
-    private Optional<InstalledPluginVersion> lookupInstalledPluginVersion(String internalName) {
-        if (Strings.isNullOrEmpty(internalName)) {
-            return Optional.empty();
-        }
-        String key = INSTALLED_VERSION_KEY_PREFIX + internalName;
-        String value = configManager.getConfiguration(INSTALLED_VERSION_GROUP, key);
-        if (Strings.isNullOrEmpty(value)) {
-            return Optional.empty();
-        }
-
-        String[] parts = value.split(":", 2);
-        if (parts.length < 2 || Strings.isNullOrEmpty(parts[0]) || Strings.isNullOrEmpty(parts[1])) {
-            return Optional.empty();
-        }
-
-        return Optional.of(new InstalledPluginVersion(parts[0], parts[1]));
-    }
-
-    public Optional<String> getInstalledPluginVersion(String internalName) {
-        return lookupInstalledPluginVersion(internalName).map(InstalledPluginVersion::getVersion);
-    }
-
-    private void rememberInstalledPluginVersion(String internalName, String version, String sha256) {
-        if (Strings.isNullOrEmpty(internalName) || Strings.isNullOrEmpty(version) || Strings.isNullOrEmpty(sha256)) {
-            return;
-        }
-
-        configManager.setConfiguration(
-                INSTALLED_VERSION_GROUP,
-                INSTALLED_VERSION_KEY_PREFIX + internalName,
-                version + ":" + sha256
-        );
-    }
-
-    private void clearInstalledPluginVersion(String internalName) {
-        if (Strings.isNullOrEmpty(internalName)) {
-            return;
-        }
-        configManager.unsetConfiguration(INSTALLED_VERSION_GROUP, INSTALLED_VERSION_KEY_PREFIX + internalName);
-    }
-
-    private static final class InstalledPluginVersion {
-        private final String version;
-        private final String sha256;
-
-        private InstalledPluginVersion(String version, String sha256) {
-            this.version = version;
-            this.sha256 = sha256;
-        }
-
-        public String getVersion() {
-            return version;
-        }
-
-        public String getSha256() {
-            return sha256;
         }
     }
 }

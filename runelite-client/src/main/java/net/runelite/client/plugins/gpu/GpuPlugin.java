@@ -77,6 +77,7 @@ import java.util.concurrent.CountDownLatch;
 @PluginDescriptor(
 	name = "GPU",
 	description = "Offloads rendering to GPU",
+	enabledByDefault = true,
 	tags = {"fog", "draw distance"},
 	loadInSafeMode = false
 )
@@ -107,6 +108,9 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	@Inject
 	private RegionManager regionManager;
+
+	@Inject
+	private FacePrioritySorter facePrioritySorter;
 
 	@Inject
 	private DrawManager drawManager;
@@ -159,23 +163,21 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 	private GpuFloatBuffer uniformBuffer;
 
+	private int cameraX, cameraY, cameraZ;
 	private int cameraYaw, cameraPitch;
+	private int minLevel, level, maxLevel;
+    public Set<Integer> hideRoofIds;
 
 	private VAOList vaoO;
 	private VAOList vaoA;
 	private VAOList vaoPO;
 
 	private SceneUploader clientUploader, mapUploader;
-	private FacePrioritySorter facePrioritySorter;
 
 	static class SceneContext
 	{
 		final int sizeX, sizeZ;
 		Zone[][] zones;
-
-		private int cameraX, cameraY, cameraZ;
-		private int minLevel, level, maxLevel;
-		private Set<Integer> hideRoofIds;
 
 		SceneContext(int sizeX, int sizeZ)
 		{
@@ -259,7 +261,6 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		subs = new SceneContext[MAX_WORLDVIEWS];
 		clientUploader = new SceneUploader(renderCallbackManager);
 		mapUploader = new SceneUploader(renderCallbackManager);
-		facePrioritySorter = new FacePrioritySorter(clientUploader);
 		clientThread.invoke(() ->
 		{
 			try
@@ -787,22 +788,18 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		float cameraX, float cameraY, float cameraZ, float cameraPitch, float cameraYaw,
 		int minLevel, int level, int maxLevel, Set<Integer> hideRoofIds)
 	{
-		SceneContext ctx = context(scene);
-		if (ctx != null)
-		{
-			ctx.cameraX = (int) cameraX;
-			ctx.cameraY = (int) cameraY;
-			ctx.cameraZ = (int) cameraZ;
-			ctx.minLevel = minLevel;
-			ctx.level = level;
-			ctx.maxLevel = maxLevel;
-			ctx.hideRoofIds = hideRoofIds;
-		}
+		this.cameraX = (int) cameraX;
+		this.cameraY = (int) cameraY;
+		this.cameraZ = (int) cameraZ;
+		this.cameraYaw = client.getCameraYaw();
+		this.cameraPitch = client.getCameraPitch();
+		this.minLevel = minLevel;
+		this.level = level;
+		this.maxLevel = maxLevel;
+		this.hideRoofIds = hideRoofIds;
 
 		if (scene.getWorldViewId() == WorldView.TOPLEVEL)
 		{
-			this.cameraYaw = client.getCameraYaw();
-			this.cameraPitch = client.getCameraPitch();
 			preSceneDrawToplevel(scene, cameraX, cameraY, cameraZ, cameraPitch, cameraYaw);
 		}
 		else
@@ -1038,7 +1035,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		}
 
 		int offset = scene.getWorldViewId() == -1 ? (SCENE_OFFSET >> 3) : 0;
-		z.renderOpaque(zx - offset, zz - offset, ctx.minLevel, ctx.level, ctx.maxLevel, ctx.hideRoofIds);
+		z.renderOpaque(zx - offset, zz - offset, minLevel, level, maxLevel, hideRoofIds);
 
 		checkGLErrors();
 	}
@@ -1066,17 +1063,17 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		}
 
 		int offset = scene.getWorldViewId() == -1 ? (SCENE_OFFSET >> 3) : 0;
-		int dx = ctx.cameraX - ((zx - offset) << 10);
-		int dz = ctx.cameraZ - ((zz - offset) << 10);
+		int dx = cameraX - ((zx - offset) << 10);
+		int dz = cameraZ - ((zz - offset) << 10);
 		boolean close = dx * dx + dz * dz < ALPHA_ZSORT_CLOSE * ALPHA_ZSORT_CLOSE;
 
 		if (level == 0)
 		{
-			z.alphaSort(zx - offset, zz - offset, ctx.cameraX, ctx.cameraY, ctx.cameraZ);
-			z.multizoneLocs(scene, zx - offset, zz - offset, ctx.cameraX, ctx.cameraZ, ctx.zones);
+			z.alphaSort(zx - offset, zz - offset, cameraX, cameraY, cameraZ);
+			z.multizoneLocs(scene, zx - offset, zz - offset, cameraX, cameraZ, ctx.zones);
 		}
 
-		z.renderAlpha(zx - offset, zz - offset, cameraYaw, cameraPitch, ctx.minLevel, ctx.level, ctx.maxLevel, level, ctx.hideRoofIds, !close);
+		z.renderAlpha(zx - offset, zz - offset, cameraYaw, cameraPitch, minLevel, this.level, maxLevel, level, hideRoofIds, !close);
 
 		checkGLErrors();
 	}
@@ -1101,29 +1098,26 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 			{
 				glUniform3i(uniBase, 0, 0, 0);
 
-				int sz = vaoO.unmap();
-				for (int i = 0; i < sz; ++i)
+				var vaos = vaoO.unmap();
+				for (VAO vao : vaos)
 				{
-					VAO vao = vaoO.vaos.get(i);
 					vao.draw();
 					vao.reset();
 				}
 
-				sz = vaoPO.unmap();
-				if (sz > 0)
+				vaos = vaoPO.unmap();
+				if (!vaos.isEmpty())
 				{
 					glDepthMask(false);
-					for (int i = 0; i < sz; ++i)
+					for (VAO vao : vaos)
 					{
-						VAO vao = vaoPO.vaos.get(i);
 						vao.draw();
 					}
 					glDepthMask(true);
 
 					glColorMask(false, false, false, false);
-					for (int i = 0; i < sz; ++i)
+					for (VAO vao : vaos)
 					{
-						VAO vao = vaoPO.vaos.get(i);
 						vao.draw();
 						vao.reset();
 					}
@@ -1164,7 +1158,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		if (m.getFaceTransparencies() == null)
 		{
 			VAO o = vaoO.get(size);
-			clientUploader.uploadTempModel(m, orient, x, y, z, o.vbo.vb);
+			SceneUploader.uploadTempModel(m, orient, x, y, z, o.vbo.vb);
 		}
 		else
 		{
@@ -1190,7 +1184,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 
 				// level is checked prior to this callback being run, in order to cull clickboxes, but
 				// tileObject.getPlane()>maxLevel if visbelow is set - lower the object to the max level
-				int plane = Math.min(ctx.maxLevel, tileObject.getPlane());
+				int plane = Math.min(maxLevel, tileObject.getPlane());
 				// renderable modelheight is typically not set here because DynamicObject doesn't compute it on the returned model
 				zone.addTempAlphaModel(a.vao, start, end, plane, x & 1023, y, z & 1023);
 			}
@@ -1245,7 +1239,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		else
 		{
 			VAO o = vaoO.get(size);
-			clientUploader.uploadTempModel(m, orient, x, y, z, o.vbo.vb);
+			SceneUploader.uploadTempModel(m, orient, x, y, z, o.vbo.vb);
 		}
 	}
 
@@ -1613,6 +1607,7 @@ public class GpuPlugin extends Plugin implements DrawCallbacks
 		Zone[][] newZones = new Zone[SCENE_ZONES][SCENE_ZONES];
 		final GameState gameState = client.getGameState();
 		if (prev.isInstance() == scene.isInstance()
+			&& prev.getRoofRemovalMode() == scene.getRoofRemovalMode()
 			&& gameState == GameState.LOGGED_IN)
 		{
 			int[][][] prevTemplates = prev.getInstanceTemplateChunks();
